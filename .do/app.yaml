@@ -1,0 +1,41 @@
+# DigitalOcean App Platform spec for the 11xSales Storefront API.
+# Create it with: Apps > Create App > "Import from app spec" (or doctl apps create --spec .do/app.yaml).
+# Values marked "set in the dashboard" are secrets: paste them there, never in this file.
+# It uses the SAME database as 11xsales-be (attach that cluster; this app never migrates it).
+name: xsales-storefront-api
+region: blr
+services:
+  - name: storefront-api
+    github:
+      repo: Sukhvirsukh/11x-sales-storefront-apis
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 5100
+    instance_count: 2
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /api/v1/health/ready
+    envs:
+      - { key: NODE_ENV, value: production }
+      - { key: CLUSTER_WORKERS, value: auto }
+      # The same managed Postgres cluster as 11xsales-be (bind it as "db").
+      - { key: DB_HOST, value: "${db.HOSTNAME}" }
+      - { key: DB_PORT, value: "${db.PORT}" }
+      - { key: DB_NAME, value: "${db.DATABASE}" }
+      - { key: DB_USER, value: "${db.USERNAME}" }
+      - { key: DB_PASSWORD, value: "${db.PASSWORD}" }
+      - { key: DB_SSL, value: "true" }
+      # Optional read replica of that cluster:
+      - { key: DB_READ_HOST, value: "" }
+      - { key: REDIS_URL, type: SECRET }
+      - { key: LOG_DIR, value: logs }
+      # Secrets - set in the dashboard. Both MUST equal the values in 11xsales-be.
+      - { key: JWT_SECRET, type: SECRET }
+      - { key: INTERNAL_API_TOKEN, type: SECRET }
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    production: true
+    # cluster_name: <11xsales-be's cluster>   # attach the existing cluster instead of creating one

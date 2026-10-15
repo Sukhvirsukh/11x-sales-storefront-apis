@@ -1,0 +1,83 @@
+# Checks every push: lint, typecheck, build, then boots the API against Postgres
+# + Redis and runs the smoke test. The schema belongs to 11xsales-be, so the
+# database here is empty: the smoke test covers what needs no rows (health,
+# routing, credential format checks, JWT and service-token auth).
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint, typecheck, build, smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: xsales_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: development
+      PORT: '5100'
+      HOST: 127.0.0.1
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_NAME: xsales_ci
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: ci-only-access-secret
+      INTERNAL_API_TOKEN: ci-only-internal-token
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+
+      - name: Start the API
+        run: |
+          node dist/server.js > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:5100/api/v1/health > /dev/null && exit 0
+            sleep 1
+          done
+          echo "The API didn't start:"; cat api.log; exit 1
+
+      - name: Smoke test
+        run: node scripts/smoke-test.mjs
+        env:
+          SMOKE_JWT_SECRET: ci-only-access-secret
+          SMOKE_INTERNAL_TOKEN: ci-only-internal-token
+
+      - name: API log
+        if: failure()
+        run: tail -n 100 api.log || true
